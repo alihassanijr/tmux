@@ -33,6 +33,28 @@
  * cell a pointer to its parent cell.
  */
 
+/*
+ * Reserve a one-cell border all the way around the outside of the window so
+ * every edge pane is fully boxed, not just separated from its neighbours. The
+ * layout is inset by this much on each side; the freed edge cells are drawn as
+ * the outer border by screen-redraw.c.
+ */
+#define LAYOUT_OUTER_BORDER 1
+
+/* Outer border width for a given window dimension (0 if too small to fit). */
+static u_int
+layout_outer(u_int n)
+{
+	return (n > 2 * LAYOUT_OUTER_BORDER ? LAYOUT_OUTER_BORDER : 0);
+}
+
+/* Usable layout size for a given window dimension after the outer border. */
+static u_int
+layout_inset(u_int n)
+{
+	return (n - 2 * layout_outer(n));
+}
+
 static u_int	layout_resize_check(struct window *, struct layout_cell *,
 		    enum layout_type);
 static int	layout_resize_pane_grow(struct window *, struct layout_cell *,
@@ -282,8 +304,8 @@ layout_fix_offsets(struct window *w)
 	if (lc->flags & LAYOUT_CELL_FLOATING)
 		return;
 
-	lc->xoff = 0;
-	lc->yoff = 0;
+	lc->xoff = layout_outer(w->sx);
+	lc->yoff = layout_outer(w->sy);
 
 	layout_fix_offsets1(lc);
 }
@@ -340,12 +362,16 @@ layout_cell_is_bottom(struct window *w, struct layout_cell *lc)
 
 /*
  * Returns 1 if we need to add an extra line for the pane status line. This is
- * the case for the most upper or lower panes only.
+ * the case for the most upper or lower panes only - and only when there is no
+ * outer border on that side, since the outer border already provides a row to
+ * host the status line for an edge pane.
  */
 static int
 layout_add_horizontal_border(struct window *w, struct layout_cell *lc,
     int status)
 {
+	if (layout_outer(w->sy) != 0)
+		return (0);
 	if (status == PANE_STATUS_TOP)
 		return (layout_cell_is_top(w, lc));
 	if (status == PANE_STATUS_BOTTOM)
@@ -601,7 +627,8 @@ layout_init(struct window *w, struct window_pane *wp)
 	struct layout_cell	*lc;
 
 	lc = w->layout_root = layout_create_cell(NULL);
-	layout_set_size(lc, w->sx, w->sy, 0, 0);
+	layout_set_size(lc, layout_inset(w->sx), layout_inset(w->sy),
+	    layout_outer(w->sx), layout_outer(w->sy));
 	layout_make_leaf(lc, wp);
 	layout_fix_panes(w, NULL);
 }
@@ -635,6 +662,11 @@ layout_resize(struct window *w, u_int sx, u_int sy)
 	 */
 	if (lc->type == LAYOUT_WINDOWPANE && (lc->flags & LAYOUT_CELL_FLOATING))
 		return;
+
+	/* Inset the layout to leave room for the outer border. */
+	sx = layout_inset(sx);
+	sy = layout_inset(sy);
+
 	xchange = sx - lc->sx;
 	xlimit = layout_resize_check(w, lc, LAYOUT_LEFTRIGHT);
 	if (xchange < 0 && xchange < -xlimit)

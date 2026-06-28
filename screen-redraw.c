@@ -123,12 +123,10 @@ static enum screen_redraw_border_type
 screen_redraw_pane_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
     int px, int py)
 {
-	struct options	*oo = wp->window->options;
 	int		 ex = wp->xoff + wp->sx, ey = wp->yoff + wp->sy;
-	int		 hsplit = 0, vsplit = 0, pane_status = ctx->pane_status;
+	int		 pane_status = ctx->pane_status;
 	int		 pane_scrollbars = ctx->pane_scrollbars, sb_w = 0;
 	int		 sb_pos, sx = wp->sx, sy = wp->sy, left, right;
-	enum layout_type split_type;
 
 	if (pane_scrollbars != 0)
 		sb_pos = ctx->pane_scrollbars_pos;
@@ -166,76 +164,40 @@ screen_redraw_pane_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
 		return (SCREEN_REDRAW_OUTSIDE);
 	}
 
-	/* Get pane indicator. */
-	switch (options_get_number(oo, "pane-border-indicators")) {
-	case PANE_BORDER_COLOUR:
-	case PANE_BORDER_BOTH:
-		if (screen_redraw_two_panes(wp->window, &split_type)) {
-			hsplit = (split_type == LAYOUT_LEFTRIGHT);
-			vsplit = (split_type == LAYOUT_TOPBOTTOM);
-		}
-		break;
-	}
-
 	/*
-	 * Left/right borders. The sy / 2 test is to colour only half the
-	 * active window's border when there are two panes.
+	 * Border ring around the pane. Report all four sides (the outer window
+	 * frame and shared inter-pane borders alike) using a plain geometric
+	 * test - the same shape as floating panes above. Active-pane colouring
+	 * is handled by screen_redraw_check_is and the glyph by
+	 * screen_redraw_type_of_cell, so no half-splitting is done here.
+	 *
+	 * The exception is the pane status line: with pane-border-status top
+	 * (bottom) a pane's bottom (top) border is the *next* pane's title
+	 * line, so it must stay owned by that neighbour or its title text would
+	 * be overdrawn. The outermost frame row carries no title, so it is
+	 * always owned.
 	 */
-	if ((wp->yoff == 0 || py >= wp->yoff - 1) && py <= ey) {
-		if (sb_pos == PANE_SCROLLBARS_LEFT) {
-			if (wp->xoff - sb_w == 0 && px == sx + sb_w) {
-				if (!hsplit || (hsplit && py <= sy / 2))
-					return (SCREEN_REDRAW_BORDER_RIGHT);
-			}
-			if (wp->xoff - sb_w != 0) {
-				if (px == wp->xoff - sb_w - 1 &&
-				    (!hsplit || (hsplit && py > sy / 2)))
-					return (SCREEN_REDRAW_BORDER_LEFT);
-				if (px == wp->xoff + sx + sb_w - 1)
-					return (SCREEN_REDRAW_BORDER_RIGHT);
-			}
-		} else { /* sb_pos == PANE_SCROLLBARS_RIGHT or disabled */
-			if (wp->xoff == 0 && px == sx + sb_w) {
-				if (!hsplit || (hsplit && py <= sy / 2))
-					return (SCREEN_REDRAW_BORDER_RIGHT);
-			}
-			if (wp->xoff != 0) {
-				if (px == wp->xoff - 1 &&
-				    (!hsplit || (hsplit && py > sy / 2)))
-					return (SCREEN_REDRAW_BORDER_LEFT);
-				if (px == wp->xoff + sx + sb_w)
-					return (SCREEN_REDRAW_BORDER_RIGHT);
-			}
-		}
-	}
+	left = wp->xoff - 1;
+	right = wp->xoff + sx;
+	if (sb_pos == PANE_SCROLLBARS_LEFT)
+		left -= sb_w;
+	else
+		right += sb_w;
 
-	/* Top/bottom borders. */
-	if (vsplit && pane_status == PANE_STATUS_OFF) {
-		if (wp->yoff == 0 && py == sy && px <= sx / 2)
-			return (SCREEN_REDRAW_BORDER_BOTTOM);
-		if (wp->yoff != 0 && py == wp->yoff - 1 && px > sx / 2)
+	if (py >= wp->yoff - 1 && py <= ey) {
+		if (px == left)
+			return (SCREEN_REDRAW_BORDER_LEFT);
+		if (px == right)
+			return (SCREEN_REDRAW_BORDER_RIGHT);
+	}
+	if (px >= left && px <= right) {
+		if (py == wp->yoff - 1 &&
+		    (pane_status != PANE_STATUS_BOTTOM || py == 0))
 			return (SCREEN_REDRAW_BORDER_TOP);
-	} else {
-		if (sb_pos == PANE_SCROLLBARS_LEFT) {
-			if ((wp->xoff - sb_w == 0 || px >= wp->xoff - sb_w) &&
-			    (px <= ex || (sb_w != 0 && px < ex + sb_w))) {
-				if (pane_status != PANE_STATUS_BOTTOM &&
-				    wp->yoff != 0 && py == wp->yoff - 1)
-					return (SCREEN_REDRAW_BORDER_TOP);
-				if (pane_status != PANE_STATUS_TOP && py == ey)
-					return (SCREEN_REDRAW_BORDER_BOTTOM);
-			}
-		} else { /* sb_pos == PANE_SCROLLBARS_RIGHT */
-			if ((wp->xoff == 0 || px >= wp->xoff) &&
-			    (px <= ex || (sb_w != 0 && px < ex + sb_w))) {
-				if (pane_status != PANE_STATUS_BOTTOM &&
-				    wp->yoff != 0 &&
-				    py == wp->yoff - 1)
-					return (SCREEN_REDRAW_BORDER_TOP);
-				if (pane_status != PANE_STATUS_TOP && py == ey)
-					return (SCREEN_REDRAW_BORDER_BOTTOM);
-			}
-		}
+		if (py == ey &&
+		    (pane_status != PANE_STATUS_TOP ||
+		    py == (int)wp->window->sy - 1))
+			return (SCREEN_REDRAW_BORDER_BOTTOM);
 	}
 
 	/* Outside pane. */
@@ -294,13 +256,16 @@ screen_redraw_cell_border(struct screen_redraw_ctx *ctx, struct window_pane *wp,
 		return (n);
 	}
 
-	/* Outside the window or on the window border? */
+	/*
+	 * Outside the window? The outer border is now a real border drawn
+	 * around the inset layout, so the window edge itself is not treated as
+	 * an implicit border any more - the pane scan below picks up the outer
+	 * border cells like any other.
+	 */
 	if (ctx->pane_status == PANE_STATUS_BOTTOM)
 		sy--;
 	if (px > sx || py > sy)
 		return (0);
-	if (px == sx || py == sy)
-		return (1);
 
 	/*
 	 * If checking a cell from a tiled pane, ignore floating panes because
@@ -344,7 +309,7 @@ screen_redraw_type_of_cell(struct screen_redraw_ctx *ctx,
 	 *		     1
 	 */
 	if (!window_pane_is_floating(wp)) {
-		if (px == 0 || screen_redraw_cell_border(ctx, wp, px - 1, py))
+		if (screen_redraw_cell_border(ctx, wp, px - 1, py))
 			borders |= 8;
 		if (px <= sx && screen_redraw_cell_border(ctx, wp, px + 1, py))
 			borders |= 4;
@@ -362,8 +327,7 @@ screen_redraw_type_of_cell(struct screen_redraw_ctx *ctx,
 			    screen_redraw_cell_border(ctx, wp, px, py + 1))
 				borders |= 1;
 		} else {
-			if (py == 0 ||
-			    screen_redraw_cell_border(ctx, wp, px, py - 1))
+			if (screen_redraw_cell_border(ctx, wp, px, py - 1))
 				borders |= 2;
 			if (screen_redraw_cell_border(ctx, wp, px, py + 1))
 				borders |= 1;
@@ -571,12 +535,36 @@ static int
 screen_redraw_check_is(struct screen_redraw_ctx *ctx, int px, int py,
     struct window_pane *wp)
 {
-	enum screen_redraw_border_type	border;
+	int	left, right, top, bottom, sb_w = 0, sb_pos = 0;
 
 	if (wp == NULL)
 		return (0); /* no active pane */
-	border = screen_redraw_pane_border(ctx, wp, px, py);
-	if (border != SCREEN_REDRAW_INSIDE && border != SCREEN_REDRAW_OUTSIDE)
+
+	/*
+	 * Highlight the whole border rectangle around the active pane,
+	 * regardless of how the layout was built or whether the borders carry
+	 * a pane status line. screen_redraw_pane_border only assigns some
+	 * sides to the pane (it splits a shared border in half, and suppresses
+	 * the status-line edge and the window edges), so use a plain geometric
+	 * test here instead.
+	 */
+	if (ctx->pane_scrollbars != 0)
+		sb_pos = ctx->pane_scrollbars_pos;
+	if (window_pane_show_scrollbar(wp, ctx->pane_scrollbars))
+		sb_w = wp->scrollbar_style.width + wp->scrollbar_style.pad;
+
+	left = wp->xoff - 1;
+	right = wp->xoff + (int)wp->sx;
+	top = wp->yoff - 1;
+	bottom = wp->yoff + (int)wp->sy;
+	if (sb_pos == PANE_SCROLLBARS_LEFT)
+		left -= sb_w;
+	else
+		right += sb_w;
+
+	if ((px == left || px == right) && py >= top && py <= bottom)
+		return (1);
+	if ((py == top || py == bottom) && px >= left && px <= right)
 		return (1);
 	return (0);
 }
@@ -587,6 +575,7 @@ screen_redraw_make_pane_status(struct client *c, struct window_pane *wp,
     struct screen_redraw_ctx *rctx, enum pane_lines pane_lines)
 {
 	struct window		*w = wp->window;
+	struct window_pane	*active = server_client_get_pane(c);
 	struct grid_cell	 gc;
 	const char		*fmt, *border_option;
 	struct format_tree	*ft;
@@ -605,7 +594,21 @@ screen_redraw_make_pane_status(struct client *c, struct window_pane *wp,
 	ft = format_create(c, NULL, FORMAT_PANE|wp->id, FORMAT_STATUS);
 	format_defaults(ft, c, c->session, c->session->curw, wp);
 
-	if (wp == server_client_get_pane(c))
+	/*
+	 * The status line sits on a pane border which is shared with the
+	 * neighbouring pane (its top status line is that neighbour's bottom
+	 * border and vice versa). Use the active border style if this pane is
+	 * active, or if the status line lies on the active pane's border, so
+	 * the active pane is highlighted on all four sides.
+	 */
+	if (pane_status == PANE_STATUS_TOP)
+		py = wp->yoff - 1;
+	else
+		py = wp->yoff + wp->sy;
+	px = wp->xoff + 2;
+	if (wp == active ||
+	    (active != NULL && !window_pane_is_floating(active) &&
+	    screen_redraw_check_is(rctx, px, py, active)))
 		border_option = "pane-active-border-style";
 	else
 		border_option = "pane-border-style";
