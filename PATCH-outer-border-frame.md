@@ -101,11 +101,19 @@ at full client size — the freed edge cells are the frame. No `resize.c` change
    — the window edge is no longer an implicit border (the inset frame is a real one).
 
 10. **`screen_redraw_type_of_cell`** (non-floating branch): delete the `px == 0 ||`
-    shortcut (left bit) and the `py == 0 ||` shortcut in the `PANE_STATUS_OFF` (`else`)
-    branch (top bit). With the frame at real columns/rows `0` and `sx-1`/`sy-1`, the
-    glyph/junction is computed correctly from actual neighbour cells. (The `TOP`/`BOTTOM`
-    status sub-branches still have `py==0`/`py!=0`/`py!=sy` guards; harmless here, revisit
-    if doing deeper status work.)
+    shortcut (left bit), the `py == 0 ||` shortcut in the `PANE_STATUS_OFF` (`else`)
+    branch, **and** the `py == 0 ||` shortcut in the `PANE_STATUS_BOTTOM` branch (both
+    top bit). With the frame at real columns/rows `0` and `sx-1`/`sy-1`, the
+    glyph/junction is computed correctly from actual neighbour cells.
+
+    > **Bug found after first pass:** the `PANE_STATUS_BOTTOM` `py == 0 ||` was
+    > initially left in (thought harmless). It forces bit 2 (border-above) ON for the
+    > whole top frame row, so with `pane-border-status bottom` the outer top frame
+    > rendered with phantom upward strokes: `═`→`╩`, `╔`→`╠`, `╗`→`╣`, `╦`→`╬`. Row 0
+    > is now the real outer frame (nothing above it), so the shortcut must go — making
+    > the non-floating `BOTTOM` branch match the floating `BOTTOM` branch (which never
+    > had it). The `TOP` branch's `py != 0` guard and the `py != sy` bottom-bit guards
+    > are correct and stay.
 
 ### Apply order
 6 (geometric `check_is`) → 7 (status colour, depends on 6) → 8/9/10 (frame ownership +
@@ -378,7 +386,15 @@ index 17085a41..bf55bea3 100644
  			borders |= 8;
  		if (px <= sx && screen_redraw_cell_border(ctx, wp, px + 1, py))
  			borders |= 4;
-@@ -362,8 +327,7 @@ screen_redraw_type_of_cell(struct screen_redraw_ctx *ctx,
+@@ -355,15 +320,13 @@ screen_redraw_type_of_cell(struct screen_redraw_ctx *ctx,
+ 			if (screen_redraw_cell_border(ctx, wp, px, py + 1))
+ 				borders |= 1;
+ 		} else if (pane_status == PANE_STATUS_BOTTOM) {
+-			if (py == 0 ||
+-			    screen_redraw_cell_border(ctx, wp, px, py - 1))
++			if (screen_redraw_cell_border(ctx, wp, px, py - 1))
+ 				borders |= 2;
+ 			if (py != sy &&
  			    screen_redraw_cell_border(ctx, wp, px, py + 1))
  				borders |= 1;
  		} else {

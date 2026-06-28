@@ -320,8 +320,7 @@ screen_redraw_type_of_cell(struct screen_redraw_ctx *ctx,
 			if (screen_redraw_cell_border(ctx, wp, px, py + 1))
 				borders |= 1;
 		} else if (pane_status == PANE_STATUS_BOTTOM) {
-			if (py == 0 ||
-			    screen_redraw_cell_border(ctx, wp, px, py - 1))
+			if (screen_redraw_cell_border(ctx, wp, px, py - 1))
 				borders |= 2;
 			if (py != sy &&
 			    screen_redraw_cell_border(ctx, wp, px, py + 1))
